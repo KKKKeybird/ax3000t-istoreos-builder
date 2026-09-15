@@ -50,7 +50,7 @@ jobs:
         run: |
           cp ../ax3000t.config .config
           make defconfig
-          grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y|CONFIG_PACKAGE_luci-app-store=y' .config
+          grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y|CONFIG_PACKAGE_luci-app-store=y|CONFIG_PACKAGE_dnsmasq-full=y|CONFIG_PACKAGE_adblock-fast=y' .config
 
       - name: Download sources
         working-directory: istoreos

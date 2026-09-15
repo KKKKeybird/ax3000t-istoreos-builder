@@ -23,3 +23,18 @@ either required image is absent or is 32 MiB or larger.
 
 The first-stage image must end in `initramfs-factory.ubi`. The second-stage
 image must end in `squashfs-sysupgrade.bin`.
+
+## Verified local build
+
+The verified local image in `artifacts/` is iStoreOS 24.10.8 with OpenClash
+0.47.156, `dnsmasq-full`, and adblock-fast/HaGeZi support. It uses kernel ABI
+6.6.144 and the stock-layout `xiaomi_mi-router-ax3000t` profile. This image
+was built locally; GitHub Actions remains a reproducible builder.
+
+The sysupgrade image SHA-256 is recorded in `artifacts/SHA256SUMS` and its
+manifest. Do not flash the `-ubootmod` profile. For U-Boot TFTP recovery use
+router IP `192.168.10.1`, TFTP host `192.168.10.100`, and filename
+`firmware_ubi.bin`; the included PowerShell helper can serve that file.
+
+The recovery helpers are for temporary recovery only. Never commit router
+backups, serial logs, credentials, private keys, or factory partition dumps.
