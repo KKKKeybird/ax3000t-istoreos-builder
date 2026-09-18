@@ -101,42 +101,44 @@ jobs:
 
       - name: Collect and validate packages
         run: |
-          mkdir -p artifacts inspect
+          rm -rf uu-artifacts inspect
+          mkdir -p uu-artifacts inspect
           find istoreos/bin -type f \
             \( -name 'uugamebooster_*.ipk' -o -name 'luci-app-uugamebooster_*.ipk' \) \
-            -exec cp -v {} artifacts/ \;
+            -exec cp -v {} uu-artifacts/ \;
 
-          test "$(find artifacts -maxdepth 1 -name '*.ipk' | wc -l)" -eq 2
+          test "$(find uu-artifacts -maxdepth 1 -name '*.ipk' | wc -l)" -eq 2
 
-          : > artifacts/PACKAGE-CONTROLS.txt
-          for package in artifacts/*.ipk; do
+          : > uu-artifacts/PACKAGE-CONTROLS.txt
+          for package in uu-artifacts/*.ipk; do
             name="$(basename "$package" .ipk)"
             mkdir -p "inspect/$name"
             tar -xf "$package" -C "inspect/$name"
             tar -xOf "inspect/$name/control.tar.gz" ./control \
-              | tee -a artifacts/PACKAGE-CONTROLS.txt
+              | tee -a uu-artifacts/PACKAGE-CONTROLS.txt
           done
 
-          if grep -Eqi 'kmod-(nft-compat|ipt-core|ipt-nat)' artifacts/PACKAGE-CONTROLS.txt; then
+          if grep -Eqi 'kmod-(nft-compat|ipt-core|ipt-nat)' uu-artifacts/PACKAGE-CONTROLS.txt; then
             echo 'Forbidden external firewall kmod dependency detected' >&2
             exit 1
           fi
 
-          core_package="$(find artifacts -maxdepth 1 -name 'uugamebooster_*.ipk' | head -n1)"
+          core_package="$(find uu-artifacts -maxdepth 1 -name 'uugamebooster_*.ipk' | head -n1)"
           core_dir="inspect/$(basename "$core_package" .ipk)"
           tar -tzf "$core_dir/data.tar.gz" | grep -q './usr/bin/uugamebooster'
           tar -tzf "$core_dir/data.tar.gz" | grep -q './usr/bin/xtables-nft-multi'
 
-          cp source-commits.txt artifacts/BUILD-METADATA.txt
-          printf '%s\n' 'Target: Xiaomi AX3000T RD03 (aarch64_cortex-a53)' >> artifacts/BUILD-METADATA.txt
-          printf '%s\n' 'Policy: user-space packages only; no external kmods' >> artifacts/BUILD-METADATA.txt
-          sha256sum artifacts/* | tee artifacts/SHA256SUMS
-          ls -lh artifacts
+          cp source-commits.txt uu-artifacts/BUILD-METADATA.txt
+          printf '%s\n' 'Target: Xiaomi AX3000T RD03 (aarch64_cortex-a53)' >> uu-artifacts/BUILD-METADATA.txt
+          printf '%s\n' 'Policy: user-space packages only; no external kmods' >> uu-artifacts/BUILD-METADATA.txt
+          sha256sum uu-artifacts/*.ipk uu-artifacts/PACKAGE-CONTROLS.txt \
+            uu-artifacts/BUILD-METADATA.txt | tee uu-artifacts/SHA256SUMS
+          ls -lh uu-artifacts
 
       - name: Upload verified UU packages
         uses: actions/upload-artifact@v4
         with:
           name: AX3000T-RD03-UU-Game-Booster
-          path: artifacts/
+          path: uu-artifacts/
           if-no-files-found: error
           retention-days: 30
