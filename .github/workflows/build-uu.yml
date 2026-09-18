@@ -9,7 +9,7 @@ permissions:
 env:
   ISTOREOS_COMMIT: fb971407ffd9a094e6f16d9c029f1f580ed5c2ad
   UU_LUCI_COMMIT: 434e2d204cf6fadbbb71d4ee214b7a553b2828e5
-  UU_CORE_COMMIT: 1065ef4ee242dc1b8abfc724b1bb3b7997ac5a1f
+  UU_CORE_COMMIT: b4de359740d4d128692360a75a7561239c5360a8
 
 jobs:
   build:
@@ -54,9 +54,10 @@ jobs:
           test "$(git -C uu-source rev-parse HEAD)" = "$UU_LUCI_COMMIT"
           cp -a uu-source/luci-app-uugamebooster istoreos/package/
 
-          git -C uu-source checkout "$UU_CORE_COMMIT"
-          test "$(git -C uu-source rev-parse HEAD)" = "$UU_CORE_COMMIT"
-          cp -a uu-source/uugamebooster istoreos/package/
+          git clone --filter=blob:none https://github.com/coolsnowwolf/packages.git uu-core-source
+          git -C uu-core-source checkout "$UU_CORE_COMMIT"
+          test "$(git -C uu-core-source rev-parse HEAD)" = "$UU_CORE_COMMIT"
+          cp -a uu-core-source/net/uugamebooster istoreos/package/
 
           {
             echo "iStoreOS=$ISTOREOS_COMMIT"
@@ -127,6 +128,7 @@ jobs:
           core_dir="inspect/$(basename "$core_package" .ipk)"
           tar -tzf "$core_dir/data.tar.gz" | grep -q './usr/bin/uugamebooster'
           tar -tzf "$core_dir/data.tar.gz" | grep -q './usr/bin/xtables-nft-multi'
+          tar -tzf "$core_dir/data.tar.gz" | grep -q './usr/bin/xuplugin-guardian'
 
           cp source-commits.txt uu-artifacts/BUILD-METADATA.txt
           printf '%s\n' 'Target: Xiaomi AX3000T RD03 (aarch64_cortex-a53)' >> uu-artifacts/BUILD-METADATA.txt
