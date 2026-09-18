@@ -59,6 +59,9 @@ jobs:
           grep -qx '# CONFIG_PACKAGE_dnsmasq is not set' .config
           grep -qx 'CONFIG_PACKAGE_adblock-fast=y' .config
           grep -qx 'CONFIG_PACKAGE_luci-app-adblock-fast=y' .config
+          # TUN is not built into this target's kernel, and UU Game Booster
+          # needs /dev/net/tun, so make sure the module really got selected.
+          grep -qx 'CONFIG_PACKAGE_kmod-tun=y' .config
 
       - name: Download sources
         working-directory: istoreos

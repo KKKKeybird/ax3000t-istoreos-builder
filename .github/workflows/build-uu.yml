@@ -69,15 +69,19 @@ jobs:
         working-directory: istoreos
         run: |
           cp ../ax3000t.config .config
+          # kmod-tun now comes from ax3000t.config (single source of truth);
+          # only the UU-specific packages are appended here.
           cat >> .config <<'EOF'
-          CONFIG_PACKAGE_kmod-tun=y
           CONFIG_PACKAGE_uugamebooster=m
           CONFIG_PACKAGE_luci-app-uugamebooster=m
           EOF
           make defconfig
-          grep -E '^CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y$' .config
-          grep -E '^CONFIG_PACKAGE_(uugamebooster|luci-app-uugamebooster)=m$' .config
-          grep -E '^CONFIG_PACKAGE_kmod-tun=y$' .config
+          # Check every symbol separately: an alternation expression needs only
+          # ONE match, so it silently passes when one of them was dropped.
+          grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-tun=y' .config
+          grep -qx 'CONFIG_PACKAGE_uugamebooster=m' .config
+          grep -qx 'CONFIG_PACKAGE_luci-app-uugamebooster=m' .config
 
       - name: Download UU sources
         working-directory: istoreos
