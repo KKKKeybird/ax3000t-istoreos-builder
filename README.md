@@ -38,3 +38,15 @@ router IP `192.168.10.1`, TFTP host `192.168.10.100`, and filename
 
 The recovery helpers are for temporary recovery only. Never commit router
 backups, serial logs, credentials, private keys, or factory partition dumps.
+
+## UU Game Booster packages
+
+The manual `Build UU Game Booster packages for AX3000T` workflow builds two
+user-space IPKs for this iStoreOS 24.10 target. It pins the iStoreOS, LuCI,
+and UU package source commits, rejects external firewall-kmod dependencies,
+and verifies that the UU package contains its own `xtables-nft-multi` helper.
+
+The workflow never connects to the router. Download and inspect the
+`AX3000T-RD03-UU-Game-Booster` artifact before installing it. Installation
+must succeed with ordinary `opkg install`; never bypass dependency or kernel
+ABI checks with force options.
