@@ -50,7 +50,15 @@ jobs:
         run: |
           cp ../ax3000t.config .config
           make defconfig
-          grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y|CONFIG_PACKAGE_luci-app-store=y|CONFIG_PACKAGE_dnsmasq-full=y|CONFIG_PACKAGE_adblock-fast=y' .config
+          # Check every required symbol separately: a single alternation
+          # expression needs only ONE match, so it silently passes when
+          # defconfig dropped a requested option.
+          grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y' .config
+          grep -qx 'CONFIG_PACKAGE_luci-app-store=y' .config
+          grep -qx 'CONFIG_PACKAGE_dnsmasq-full=y' .config
+          grep -qx '# CONFIG_PACKAGE_dnsmasq is not set' .config
+          grep -qx 'CONFIG_PACKAGE_adblock-fast=y' .config
+          grep -qx 'CONFIG_PACKAGE_luci-app-adblock-fast=y' .config
 
       - name: Download sources
         working-directory: istoreos
