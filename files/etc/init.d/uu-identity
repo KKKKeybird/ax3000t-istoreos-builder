@@ -1,0 +1,40 @@
+#!/bin/sh /etc/rc.common
+# UU Game Booster - H3C NX30 PRO vendor identity.
+#
+# The vendor uuplugin reads its router identity from /var/tmp/uu/h3c_info
+# (on H3C firmware that file is a copy of /proc/manufactory/factoryinfo, which
+# their proc_fs.ko fabricates from the u-boot-env UBI volume). Neither exists
+# here, so we supply the two keys UU actually reads:
+#
+#     productname  -> selects the vendor build: type=h3c-<lowercased productname>
+#     manucode     -> the serial the cloud binds this router to
+#
+# /var/tmp is a tmpfs and is wiped on every boot, so this has to run each time.
+#
+# The serial is derived from br-lan's MAC rather than baked into the image, so
+# the same firmware yields a distinct, stable serial on every unit. Format
+# matches H3C's (22 chars, "219801A4QC" prefix + 12 hex digits). It is
+# deliberately NOT the serial of the NX30 PRO whose firmware was used as the
+# source, to avoid colliding with that unit in UU's cloud.
+#
+# START=98 so this runs before uuplugin (START=99).
+
+START=98
+
+SN_PREFIX="219801A4QC"
+
+start() {
+	local mac sn
+
+	mac="$(cat /sys/class/net/br-lan/address 2>/dev/null | tr -d ':' | tr 'a-f' 'A-F')"
+	if [ -z "$mac" ]; then
+		logger -t uu-identity "br-lan MAC unavailable; h3c_info not written"
+		return 1
+	fi
+
+	sn="${SN_PREFIX}${mac}"
+	mkdir -p /var/tmp/uu
+	printf 'productname=NX30Pro\nmanucode=%s\n' "$sn" > /var/tmp/uu/h3c_info
+	logger -t uu-identity "h3c_info written, sn=${sn}"
+	return 0
+}

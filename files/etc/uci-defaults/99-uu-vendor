@@ -1,0 +1,14 @@
+#!/bin/sh
+# First-boot setup for the UU Game Booster (H3C vendor build) baked in via files/.
+#
+# files/ is a plain rootfs overlay, so it cannot register services by itself.
+# The /etc/rc.d links are already shipped in the overlay; this is a safety net in
+# case they were stripped, and it is idempotent.
+#
+# No explicit start here: rcS starts S98uu-identity and S99uuplugin itself. Two
+# monitors would race over /tmp/uu.
+
+[ -x /etc/init.d/uu-identity ] && /etc/init.d/uu-identity enable
+[ -x /etc/init.d/uuplugin ] && /etc/init.d/uuplugin enable
+
+exit 0

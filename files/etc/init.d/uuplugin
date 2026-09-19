@@ -1,0 +1,37 @@
+#!/bin/sh /etc/rc.common
+# UU Game Booster (H3C NX30 PRO vendor build).
+#
+# uuplugin_monitor.sh extracts /usr/sbin/uu/uu.tar.gz into /tmp/uu, starts
+# uuplugin, and restarts it if it dies.
+#
+# uu.tar.gz is the H3C vendor build and is baked into the firmware, so a cold
+# boot needs no network. Its uu.tar.gz.md5 is shipped alongside so the monitor's
+# own integrity check passes.
+#
+# check_plugin_upgrade is intentionally commented out inside the monitor: it
+# compares the local md5 against UU's md5 for the *generic* openwrt build,
+# deletes the tarball when they differ, and would replace the vendor build with
+# the console-only generic one - which is exactly what makes the cloud answer
+# "this router model does not support acceleration".
+#
+# START=99 so uu-identity (START=98) has already written /var/tmp/uu/h3c_info.
+
+START=99
+
+start() {
+	/usr/sbin/uu/uuplugin_monitor.sh >/dev/null 2>&1 &
+}
+
+stop() {
+	local p
+	for p in $(ps w | grep -E 'uuplugin_monitor|uuplugin|xuplugin' | grep -v grep | awk '{print $1}'); do
+		kill -9 "$p" 2>/dev/null
+	done
+	return 0
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}

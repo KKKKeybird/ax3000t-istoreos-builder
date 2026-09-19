@@ -6,6 +6,11 @@ on:
 permissions:
   contents: read
 
+env:
+  ISTOREOS_COMMIT: fb971407ffd9a094e6f16d9c029f1f580ed5c2ad
+  # vernesong/OpenClash tag v0.47.156
+  OPENCLASH_COMMIT: c3a33c1d3407956fdf8f0e0b7c1a4c52e6ad9593
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -33,8 +38,8 @@ jobs:
           git clone --branch istoreos-24.10 --single-branch \
             https://github.com/istoreos/istoreos.git istoreos
           cd istoreos
-          git checkout fb971407ffd9a094e6f16d9c029f1f580ed5c2ad
-          test "$(git rev-parse HEAD)" = "fb971407ffd9a094e6f16d9c029f1f580ed5c2ad"
+          git checkout "$ISTOREOS_COMMIT"
+          test "$(git rev-parse HEAD)" = "$ISTOREOS_COMMIT"
 
       - name: Update and install feeds
         working-directory: istoreos
@@ -44,6 +49,54 @@ jobs:
           for feed in feeds/*; do
             printf '%s %s\n' "$feed" "$(git -C "$feed" rev-parse HEAD)"
           done | tee feeds-pinned.txt
+
+      - name: Add pinned OpenClash package
+        run: |
+          git clone --branch v0.47.156 --single-branch \
+            https://github.com/vernesong/OpenClash.git openclash-source
+          git -C openclash-source checkout "$OPENCLASH_COMMIT"
+          test "$(git -C openclash-source rev-parse HEAD)" = "$OPENCLASH_COMMIT"
+          cp -a openclash-source/luci-app-openclash istoreos/package/
+          test -f istoreos/package/luci-app-openclash/Makefile
+          test -x istoreos/package/luci-app-openclash/root/etc/init.d/openclash
+
+          # Its Build/Prepare calls po2lmo, which luci-base installs as a host
+          # tool. Normal LuCI packages inherit `PKG_BUILD_DEPENDS += ... luci-base/host`
+          # from luci.mk, but this Makefile includes package.mk directly and so
+          # declares nothing, letting the package build race ahead of luci-base's
+          # host install. Add the dependency explicitly.
+          m=istoreos/package/luci-app-openclash/Makefile
+          grep -q 'PKG_BUILD_DEPENDS' "$m" || \
+            sed -i 's#^PKG_BUILD_DIR:=#PKG_BUILD_DEPENDS:=luci-base/host\nPKG_BUILD_DIR:=#' "$m"
+          grep -qx 'PKG_BUILD_DEPENDS:=luci-base/host' "$m"
+
+      - name: Install UU Game Booster rootfs overlay
+        run: |
+          # files/ is OpenWrt's rootfs overlay: everything under it lands at the
+          # same path in the image, before the image is packed.
+          mkdir -p istoreos/files
+          cp -a files/. istoreos/files/
+          # git preserves the exec bit, but make it explicit: these are init scripts.
+          chmod 0755 istoreos/files/etc/init.d/uu-identity \
+                     istoreos/files/etc/init.d/uuplugin \
+                     istoreos/files/etc/uci-defaults/99-uu-vendor \
+                     istoreos/files/usr/sbin/uu/uuplugin_monitor.sh
+          # Fail early rather than shipping an image with a broken overlay.
+          test -f istoreos/files/usr/sbin/uu/uu.tar.gz
+          test -f istoreos/files/usr/sbin/uu/uu.tar.gz.md5
+          test -x istoreos/files/etc/init.d/uu-identity
+          test -x istoreos/files/etc/init.d/uuplugin
+          # files/ cannot register services by itself, and /etc/rc.d symlinks
+          # cannot be created through every upload path. Enabling both services
+          # from uci-defaults is the canonical fix and is early enough: it runs
+          # from /etc/init.d/boot (START=10), well before rcS reaches S99.
+          test -x istoreos/files/etc/uci-defaults/99-uu-vendor
+          # The shipped tarball must match the md5 the monitor will check.
+          ( cd istoreos/files/usr/sbin/uu && \
+            test "$(md5sum uu.tar.gz | cut -d' ' -f1)" = "$(cat uu.tar.gz.md5)" )
+          # And it must be the H3C vendor build, not UU's generic one.
+          test "$(tar tzf istoreos/files/usr/sbin/uu/uu.tar.gz | wc -l)" -eq 3
+          tar tzf istoreos/files/usr/sbin/uu/uu.tar.gz | grep -qx 'uuplugin'
 
       - name: Configure AX3000T stock layout
         working-directory: istoreos
@@ -62,6 +115,17 @@ jobs:
           # TUN is not built into this target's kernel, and UU Game Booster
           # needs /dev/net/tun, so make sure the module really got selected.
           grep -qx 'CONFIG_PACKAGE_kmod-tun=y' .config
+          # nft_compat is what makes `iptables-nft -j DNAT/MARK` work at all;
+          # without it UU lists devices but refuses to accelerate them.
+          grep -qx 'CONFIG_PACKAGE_kmod-nft-compat=y' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-nf-ipt=y' .config
+          # OpenClash and the pieces its Makefile would otherwise select only
+          # implicitly via PACKAGE_firewall4.
+          grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config
+          grep -qx 'CONFIG_PACKAGE_luci-compat=y' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-inet-diag=y' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-nft-tproxy=y' .config
+          grep -qx 'CONFIG_PACKAGE_dnsmasq_full_nftset=y' .config
 
       - name: Download sources
         working-directory: istoreos
@@ -77,6 +141,28 @@ jobs:
       - name: Validate and collect artifacts
         working-directory: istoreos
         run: |
+          # Prove the overlay and OpenClash reached the rootfs staging tree that
+          # the images are packed from, not just the build inputs.
+          rootfs="$(ls -d build_dir/target-*/root-* 2>/dev/null | head -n1)"
+          test -n "$rootfs"
+          echo "rootfs staging: $rootfs"
+          test -f "$rootfs/usr/sbin/uu/uu.tar.gz"
+          test -f "$rootfs/usr/sbin/uu/uu.tar.gz.md5"
+          test -x "$rootfs/usr/sbin/uu/uuplugin_monitor.sh"
+          test -x "$rootfs/etc/init.d/uu-identity"
+          test -x "$rootfs/etc/init.d/uuplugin"
+          test -x "$rootfs/etc/uci-defaults/99-uu-vendor"
+          # The serial is derived at boot from br-lan's MAC, so only the script
+          # that writes /var/tmp/uu/h3c_info has to be present.
+          grep -q 'manucode=' "$rootfs/etc/init.d/uu-identity"
+          # OpenClash app plus its nftables/geo payload.
+          test -x "$rootfs/etc/init.d/openclash"
+          test -d "$rootfs/usr/share/openclash"
+          test -f "$rootfs/etc/openclash/GeoSite.dat"
+          # The kmod that unblocks UU acceleration has to be in the image.
+          test -f "$rootfs/lib/modules/6.6.144/nft_compat.ko"
+          test -f "$rootfs/lib/modules/6.6.144/x_tables.ko"
+
           mkdir -p ../artifacts
           factory="$(find bin/targets/mediatek/filogic -maxdepth 1 -type f -name '*xiaomi_mi-router-ax3000t-initramfs-factory.ubi' | head -n1)"
           sysupgrade="$(find bin/targets/mediatek/filogic -maxdepth 1 -type f -name '*xiaomi_mi-router-ax3000t-squashfs-sysupgrade.bin' | head -n1)"
@@ -85,6 +171,10 @@ jobs:
           test "$(stat -c%s "$factory")" -lt 33554432
           test "$(stat -c%s "$sysupgrade")" -lt 33554432
           cp "$factory" "$sysupgrade" .config feeds-pinned.txt ../artifacts/
+          {
+            echo "iStoreOS=$ISTOREOS_COMMIT"
+            echo "OpenClash=$OPENCLASH_COMMIT"
+          } >> ../artifacts/feeds-pinned.txt
           sha256sum ../artifacts/* | tee ../artifacts/SHA256SUMS
           ls -lh ../artifacts
 
