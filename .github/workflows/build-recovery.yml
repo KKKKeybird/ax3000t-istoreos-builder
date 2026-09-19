@@ -60,36 +60,38 @@ jobs:
           test -d "$IB"
           echo "IB=$IB" >> "$GITHUB_ENV"
 
-      - name: Work around ImageBuilder apk/opkg config mismatch
+      - name: Work around ImageBuilder rootfs.mk empty-statement bug
         run: |
           set -x
           cd "$IB"
 
           # --- diagnose what this ImageBuilder actually bundles ---
           ls -l staging_dir/host/bin/ | grep -E ' (apk|opkg)$' || true
-          file staging_dir/host/bin/opkg 2>/dev/null || true
-          grep -c . .config || true
-          grep -in 'use_apk\|CONFIG_USE_APK' .config || echo "NO CONFIG_USE_APK IN .config"
+          grep -in 'CONFIG_USE_APK' .config || echo "NO CONFIG_USE_APK IN .config"
 
           # --- the actual defect ---
-          # include/rootfs.mk expands $(CONFIG_USE_APK) into the generated shell.
-          # When it is empty (as here: the key is absent from .config), the opkg
-          # branch yields
-          #     if [ -z "" ]; then  ; sed -i ...
+          # include/rootfs.mk expands $(CONFIG_USE_APK) into generated shell:
+          #     if [ -z "$(CONFIG_USE_APK)" ]; then
+          #         $(if $(IB),,awk -i inplace ...)
+          #         $(if $(SOURCE_DATE_EPOCH),sed -i ... ;)
+          #     fi
+          # With CONFIG_USE_APK unset AND IB set (a normal ImageBuilder run), BOTH
+          # inner expressions expand to nothing, leaving
+          #     if [ -z "" ]; then  ; fi
           # which is a bash SYNTAX error -> make dies in prepare_rootfs.
           #
-          # Setting CONFIG_USE_APK in .config may not take effect (this variable is
-          # also derived from the target's apk feature). So neutralise the empty
-          # statement directly, which is safe for BOTH branches.
+          # DO NOT "fix" this by writing CONFIG_USE_APK=y into .config on a release
+          # that bundles opkg: defconfig then believes the target uses apk, and
+          # `make image` dies earlier in package_index with fakeroot Error 127.
+          # (That was a bug in the previous revision of this workflow.)
+          #
+          # Neutralising the empty statement is correct and safe: adding ":" makes
+          # it valid shell no matter which branch the expansion takes.
           cp include/rootfs.mk include/rootfs.mk.orig
-          sed -i 's/if \[ -z "\$(CONFIG_USE_APK)" \]; then \\/if [ -z "$(CONFIG_USE_APK)" ]; then :; \\/' include/rootfs.mk
-          grep -n -A2 'if \[ -z' include/rootfs.mk || true
-
-          # Also make it explicit for the conditional blocks at the top.
-          if [ -f .config ]; then
-            sed -i 's/^# CONFIG_USE_APK is not set/CONFIG_USE_APK=y/' .config || true
-            echo 'CONFIG_USE_APK=y' >> .config
-          fi
+          sed -i 's/then \\$/then :; \\/' include/rootfs.mk
+          sed -i 's/then \\\r$/then :; \\/' include/rootfs.mk
+          diff -u include/rootfs.mk.orig include/rootfs.mk || true
+          grep -c 'then :;' include/rootfs.mk
 
       - name: Assemble rootfs overlay (auto-flasher)
         run: |
