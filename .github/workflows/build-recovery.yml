@@ -9,12 +9,9 @@ name: Build AX3000T recovery initramfs (fast)
 # carrier, HTTP-fetches the sysupgrade image from the recovery PC, verifies a
 # pinned sha256 and flashes it. No login, no serial, no working LAN required.
 #
-# This uses OpenWrt's ImageBuilder, which only ASSEMBLES a prebuilt kernel and
-# prebuilt packages. That is why it takes minutes instead of the ~3 h a full
-# iStoreOS source build needs: there is no OpenClash, no Ruby, no toolchain.
-#
-# The flashable firmware itself is not built here; the recovery flow writes the
-# already-verified known-good sysupgrade image.
+# Uses OpenWrt's ImageBuilder, which only ASSEMBLES a prebuilt kernel and
+# prebuilt packages, so it takes minutes rather than the ~3 h a full iStoreOS
+# source build needs: no OpenClash, no Ruby, no toolchain.
 
 on:
   workflow_dispatch:
@@ -41,54 +38,86 @@ jobs:
           set -eux
           VER="${{ inputs.openwrt_version }}"
           IB="openwrt-imagebuilder-${VER}-mediatek-filogic.Linux-x86_64"
-          URL="https://downloads.openwrt.org/releases/${VER}/targets/mediatek/filogic/${IB}.tar.zst"
-          echo "fetching $URL"
-          curl -fsSL -o ib.tar.zst "$URL"
-          ls -l ib.tar.zst
-          # zstd is not installed on the runner image by default
+          BASE="https://downloads.openwrt.org/releases/${VER}/targets/mediatek/filogic"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends zstd
-          tar --zstd -xf ib.tar.zst
-          ls -d "$IB"
+
+          # Older releases ship .tar.xz, 24.10+ ships .tar.zst. Probe both.
+          got=""
+          for ext in tar.zst tar.xz; do
+            if curl -fsSL -o ib.archive "$BASE/${IB}.${ext}"; then
+              got="$ext"; break
+            fi
+          done
+          test -n "$got"
+          echo "downloaded ${IB}.${got}"
+          ls -l ib.archive
+
+          case "$got" in
+            tar.zst) tar --zstd -xf ib.archive ;;
+            tar.xz)  tar -xJf ib.archive ;;
+          esac
+          test -d "$IB"
           echo "IB=$IB" >> "$GITHUB_ENV"
+
+      - name: Work around ImageBuilder apk/opkg config mismatch
+        run: |
+          set -eux
+          cd "$IB"
+          # 24.10.0's ImageBuilder ships a .config whose CONFIG_USE_APK is EMPTY
+          # while the bundled package manager is actually apk. include/rootfs.mk
+          # then takes the opkg branch and emits
+          #     if [ -z "" ]; then  ; sed -i ...
+          # which is a bash syntax error, so `make image` dies in prepare_rootfs.
+          # Make the flag agree with reality.
+          ls -l staging_dir/host/bin/ | grep -E ' (apk|opkg)$' || true
+          if [ -x staging_dir/host/bin/apk ]; then
+            # apk present -> the image will be assembled with apk
+            if grep -q '^CONFIG_USE_APK=' .config; then
+              sed -i 's/^CONFIG_USE_APK=.*/CONFIG_USE_APK=y/' .config
+            else
+              echo 'CONFIG_USE_APK=y' >> .config
+            fi
+            # Do not let a later defconfig regenerate wipe it
+            sed -i 's/^# CONFIG_USE_APK is not set/CONFIG_USE_APK=y/' .config || true
+          fi
+          grep -n 'CONFIG_USE_APK' .config || echo "CONFIG_USE_APK not present (opkg-based release)"
 
       - name: Assemble rootfs overlay (auto-flasher)
         run: |
           set -eux
           mkdir -p "$IB/files/etc/init.d" "$IB/files/etc/config" "$IB/files/usr/sbin" "$IB/files/etc/uci-defaults"
 
-          # The flashing logic. Shared by the manual entry point and the
-          # boot-time init script.
+          # The flashing logic. Shared by the manual entry point and the init script.
           cp files/usr/sbin/ax3000t-autoflash "$IB/files/usr/sbin/ax3000t-autoflash"
           chmod 0755 "$IB/files/usr/sbin/ax3000t-autoflash"
 
           # Boot-time runner (procd). START=99 so it runs after networking.
-          cat > "$IB/files/etc/init.d/ax3000t-autoflash" <<'EOF'
-          #!/bin/sh /etc/rc.common
-          START=99
-          STOP=99
-          USE_PROCD=1
-
-          start_service() {
-              procd_open_instance
-              procd_set_param command /usr/sbin/ax3000t-autoflash
-              procd_set_param stdout 1
-              procd_set_param stderr 1
-              procd_set_param respawn 3600 5 0
-              procd_close_instance
-          }
-          EOF
+          printf '%s\n' \
+            '#!/bin/sh /etc/rc.common' \
+            'START=99' \
+            'STOP=99' \
+            'USE_PROCD=1' \
+            '' \
+            'start_service() {' \
+            '	procd_open_instance' \
+            '	procd_set_param command /usr/sbin/ax3000t-autoflash' \
+            '	procd_set_param stdout 1' \
+            '	procd_set_param stderr 1' \
+            '	procd_close_instance' \
+            '}' \
+            > "$IB/files/etc/init.d/ax3000t-autoflash"
           chmod 0755 "$IB/files/etc/init.d/ax3000t-autoflash"
 
-          # Belt and braces: uci-defaults runs early even if procd services are
-          # not yet enabled, and kicks the flasher off in the background so boot
-          # is never blocked by a slow/hung network.
-          cat > "$IB/files/etc/uci-defaults/99-ax3000t-autoflash" <<'EOF'
-          #!/bin/sh
-          /etc/init.d/ax3000t-autoflash enable 2>/dev/null
-          ( sleep 5; /usr/sbin/ax3000t-autoflash ) >/dev/null 2>&1 &
-          exit 0
-          EOF
+          # Belt and braces: uci-defaults runs early even if procd services are not
+          # yet enabled, and starts the flasher in the background so boot is never
+          # blocked by a slow or hung network.
+          printf '%s\n' \
+            '#!/bin/sh' \
+            '/etc/init.d/ax3000t-autoflash enable 2>/dev/null' \
+            '( sleep 5; /usr/sbin/ax3000t-autoflash ) >/dev/null 2>&1 &' \
+            'exit 0' \
+            > "$IB/files/etc/uci-defaults/99-ax3000t-autoflash"
           chmod 0755 "$IB/files/etc/uci-defaults/99-ax3000t-autoflash"
 
           cp files/etc/config/ax3000t-recovery "$IB/files/etc/config/ax3000t-recovery"
@@ -98,6 +127,7 @@ jobs:
           test -x "$IB/files/etc/init.d/ax3000t-autoflash"
           test -x "$IB/files/etc/uci-defaults/99-ax3000t-autoflash"
           test -f "$IB/files/etc/config/ax3000t-recovery"
+          head -n1 "$IB/files/etc/init.d/ax3000t-autoflash" | grep -q '/etc/rc.common'
           grep -q 'ax3000t-autoflash' "$IB/files/usr/sbin/ax3000t-autoflash"
           grep -q '51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9' \
                "$IB/files/etc/config/ax3000t-recovery"
@@ -106,10 +136,8 @@ jobs:
         run: |
           set -eux
           cd "$IB"
-          make image \
-            PROFILE=xiaomi_mi-router-ax3000t \
-            PACKAGES="curl ca-bundle"
-            ls -l bin/targets/mediatek/filogic/
+          make image PROFILE=xiaomi_mi-router-ax3000t PACKAGES="curl ca-bundle"
+          ls -l bin/targets/mediatek/filogic/
 
       - name: Collect artifacts
         run: |
