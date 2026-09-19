@@ -239,7 +239,8 @@ jobs:
           check 'CONFIG_PACKAGE_kmod-nft-tproxy=y'
           check 'CONFIG_PACKAGE_dnsmasq_full_nftset=y'
           # Runtime libraries the prebuilt Ruby in files/ links against.
-          check 'CONFIG_PACKAGE_libgmp10=y'
+          # gmp's symbol is libgmp even though its package is libgmp10.
+          check 'CONFIG_PACKAGE_libgmp=y'
           check 'CONFIG_PACKAGE_zlib=y'
           # Ruby must not be compiled: files/ supplies it prebuilt.
           must_not 'CONFIG_PACKAGE_ruby=y'
@@ -290,6 +291,11 @@ jobs:
           test -x "$rootfs/usr/lib/ruby/ruby3.3-bin"
           test -L "$rootfs/usr/lib/libruby.so.3.3"
           test -f "$rootfs/usr/lib/ruby/3.3/yaml.rb"
+          # The libraries libruby actually links against. Checking the files is
+          # the real requirement; the CONFIG_PACKAGE_* assertion above is only a
+          # proxy, and a proxy that was already wrong once for libgmp.
+          test -f "$rootfs/usr/lib/libgmp.so.10"
+          test -f "$rootfs/usr/lib/libz.so.1"
           # OpenClash app plus its nftables/geo payload.
           test -x "$rootfs/etc/init.d/openclash"
           test -d "$rootfs/usr/share/openclash"
