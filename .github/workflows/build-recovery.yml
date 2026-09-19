@@ -62,26 +62,34 @@ jobs:
 
       - name: Work around ImageBuilder apk/opkg config mismatch
         run: |
-          set -eux
+          set -x
           cd "$IB"
-          # 24.10.0's ImageBuilder ships a .config whose CONFIG_USE_APK is EMPTY
-          # while the bundled package manager is actually apk. include/rootfs.mk
-          # then takes the opkg branch and emits
-          #     if [ -z "" ]; then  ; sed -i ...
-          # which is a bash syntax error, so `make image` dies in prepare_rootfs.
-          # Make the flag agree with reality.
+
+          # --- diagnose what this ImageBuilder actually bundles ---
           ls -l staging_dir/host/bin/ | grep -E ' (apk|opkg)$' || true
-          if [ -x staging_dir/host/bin/apk ]; then
-            # apk present -> the image will be assembled with apk
-            if grep -q '^CONFIG_USE_APK=' .config; then
-              sed -i 's/^CONFIG_USE_APK=.*/CONFIG_USE_APK=y/' .config
-            else
-              echo 'CONFIG_USE_APK=y' >> .config
-            fi
-            # Do not let a later defconfig regenerate wipe it
+          file staging_dir/host/bin/opkg 2>/dev/null || true
+          grep -c . .config || true
+          grep -in 'use_apk\|CONFIG_USE_APK' .config || echo "NO CONFIG_USE_APK IN .config"
+
+          # --- the actual defect ---
+          # include/rootfs.mk expands $(CONFIG_USE_APK) into the generated shell.
+          # When it is empty (as here: the key is absent from .config), the opkg
+          # branch yields
+          #     if [ -z "" ]; then  ; sed -i ...
+          # which is a bash SYNTAX error -> make dies in prepare_rootfs.
+          #
+          # Setting CONFIG_USE_APK in .config may not take effect (this variable is
+          # also derived from the target's apk feature). So neutralise the empty
+          # statement directly, which is safe for BOTH branches.
+          cp include/rootfs.mk include/rootfs.mk.orig
+          sed -i 's/if \[ -z "\$(CONFIG_USE_APK)" \]; then \\/if [ -z "$(CONFIG_USE_APK)" ]; then :; \\/' include/rootfs.mk
+          grep -n -A2 'if \[ -z' include/rootfs.mk || true
+
+          # Also make it explicit for the conditional blocks at the top.
+          if [ -f .config ]; then
             sed -i 's/^# CONFIG_USE_APK is not set/CONFIG_USE_APK=y/' .config || true
+            echo 'CONFIG_USE_APK=y' >> .config
           fi
-          grep -n 'CONFIG_USE_APK' .config || echo "CONFIG_USE_APK not present (opkg-based release)"
 
       - name: Assemble rootfs overlay (auto-flasher)
         run: |
