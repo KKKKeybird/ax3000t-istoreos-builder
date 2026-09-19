@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$FilePath,
-    [string]$BindAddress = "192.168.1.2",
+    [string]$BindAddress = "192.168.10.100",
     [string]$ExpectedName = "firmware_ubi.bin"
 )
 
