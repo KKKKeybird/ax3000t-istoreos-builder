@@ -1,0 +1,11 @@
+config global 'global'
+	# Where the recovery PC serves the sysupgrade image over plain HTTP.
+	option server '192.168.10.100'
+	option image  'known-good-sysupgrade.bin'
+	# Pinned sha256 of that image. A mismatch aborts the flash.
+	option sha256 '51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9'
+	# Address this box gives itself on whichever port has carrier.
+	option self_ip '192.168.10.2/24'
+	# Ports probed in order; the first with carrier AND a reachable server wins.
+	option ifaces 'eth0 eth1 wan lan1 lan2 lan3'
+	option reboot_on_success '1'
