@@ -108,7 +108,20 @@ jobs:
                      istoreos/files/etc/uci-defaults/99-uu-vendor \
                      istoreos/files/usr/sbin/uu/uuplugin_monitor.sh \
                      istoreos/files/usr/bin/ruby \
-                     istoreos/files/usr/lib/ruby/ruby3.3-bin
+                     istoreos/files/usr/lib/ruby/ruby3.3-bin 
+                     istoreos/files/usr/sbin/ax3000t-autoflash 
+                     istoreos/files/etc/init.d/ax3000t-autoflash
+
+          # ---- recovery auto-flasher ----
+          # Boots, finds whichever Ethernet port has carrier, HTTP-fetches the
+          # sysupgrade image from the recovery PC, verifies a pinned sha256 and
+          # flashes it. This is what makes recovery possible without serial and
+          # without a reachable LAN. Asserted so a silent packaging failure is
+          # caught in CI rather than on the router.
+          test -x istoreos/files/usr/sbin/ax3000t-autoflash
+          test -x istoreos/files/etc/init.d/ax3000t-autoflash
+          test -f istoreos/files/etc/config/ax3000t-recovery
+          grep -q "ax3000t-autoflash" istoreos/files/usr/sbin/ax3000t-autoflash
 
           # ---- UU Game Booster ----
           test -f istoreos/files/usr/sbin/uu/uu.tar.gz
