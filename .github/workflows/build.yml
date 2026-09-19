@@ -199,35 +199,51 @@ jobs:
         run: |
           cp ../ax3000t.config .config
           make defconfig
-          # Check every required symbol separately: a single alternation
-          # expression needs only ONE match, so it silently passes when
-          # defconfig dropped a requested option.
-          grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y' .config
-          grep -qx 'CONFIG_PACKAGE_luci-app-store=y' .config
-          grep -qx 'CONFIG_PACKAGE_dnsmasq-full=y' .config
-          grep -qx '# CONFIG_PACKAGE_dnsmasq is not set' .config
-          grep -qx 'CONFIG_PACKAGE_adblock-fast=y' .config
-          grep -qx 'CONFIG_PACKAGE_luci-app-adblock-fast=y' .config
-          # TUN is not built into this target's kernel, and UU Game Booster
-          # needs /dev/net/tun, so make sure the module really got selected.
-          grep -qx 'CONFIG_PACKAGE_kmod-tun=y' .config
+          # Each required symbol is checked on its own and names itself when it
+          # fails. A bare `grep -qx` only yields "exit code 1", which says
+          # nothing when a dozen symbols are being asserted - and this check has
+          # already failed once without revealing which symbol was at fault.
+          check() {
+            if ! grep -qx "$1" .config; then
+              echo "::error::required symbol missing from .config: $1"
+              echo "--- what .config actually says about it ---"
+              grep -n "${1%%=*}" .config | head -n5 || echo "  (symbol absent from .config entirely)"
+              exit 1
+            fi
+          }
+          must_not() {
+            if grep -qx "$1" .config; then
+              echo "::error::symbol must not be set, but is: $1"
+              exit 1
+            fi
+          }
+
+          check 'CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y'
+          check 'CONFIG_PACKAGE_luci-app-store=y'
+          check 'CONFIG_PACKAGE_dnsmasq-full=y'
+          check '# CONFIG_PACKAGE_dnsmasq is not set'
+          check 'CONFIG_PACKAGE_adblock-fast=y'
+          check 'CONFIG_PACKAGE_luci-app-adblock-fast=y'
+          # TUN is not built into this target's kernel and UU Game Booster needs
+          # /dev/net/tun, so the module has to be selected.
+          check 'CONFIG_PACKAGE_kmod-tun=y'
           # nft_compat is what makes `iptables-nft -j DNAT/MARK` work at all;
           # without it UU lists devices but refuses to accelerate them.
-          grep -qx 'CONFIG_PACKAGE_kmod-nft-compat=y' .config
-          grep -qx 'CONFIG_PACKAGE_kmod-nf-ipt=y' .config
-          # OpenClash and the pieces its Makefile would otherwise select only
+          check 'CONFIG_PACKAGE_kmod-nft-compat=y'
+          check 'CONFIG_PACKAGE_kmod-nf-ipt=y'
+          # OpenClash and what its Makefile would otherwise select only
           # implicitly via PACKAGE_firewall4.
-          grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config
-          grep -qx 'CONFIG_PACKAGE_luci-compat=y' .config
-          grep -qx 'CONFIG_PACKAGE_kmod-inet-diag=y' .config
-          grep -qx 'CONFIG_PACKAGE_kmod-nft-tproxy=y' .config
-          grep -qx 'CONFIG_PACKAGE_dnsmasq_full_nftset=y' .config
-          # Runtime libraries the prebuilt Ruby links against.
-          grep -qx 'CONFIG_PACKAGE_libgmp10=y' .config
-          grep -qx 'CONFIG_PACKAGE_zlib=y' .config
-          # Ruby must not be compiled: it is supplied prebuilt by files/.
-          ! grep -qx 'CONFIG_PACKAGE_ruby=y' .config
-          ! grep -qx 'CONFIG_PACKAGE_ruby-yaml=y' .config
+          check 'CONFIG_PACKAGE_luci-app-openclash=y'
+          check 'CONFIG_PACKAGE_luci-compat=y'
+          check 'CONFIG_PACKAGE_kmod-inet-diag=y'
+          check 'CONFIG_PACKAGE_kmod-nft-tproxy=y'
+          check 'CONFIG_PACKAGE_dnsmasq_full_nftset=y'
+          # Runtime libraries the prebuilt Ruby in files/ links against.
+          check 'CONFIG_PACKAGE_libgmp10=y'
+          check 'CONFIG_PACKAGE_zlib=y'
+          # Ruby must not be compiled: files/ supplies it prebuilt.
+          must_not 'CONFIG_PACKAGE_ruby=y'
+          must_not 'CONFIG_PACKAGE_ruby-yaml=y'
 
       - name: Download sources
         working-directory: istoreos

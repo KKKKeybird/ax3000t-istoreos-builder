@@ -47,14 +47,11 @@ image must end in `squashfs-sysupgrade.bin`.
 
 Build outputs are collected into a **fresh `dist/` directory** on every run, so
 the uploaded artifact contains only that run's images plus `SHA256SUMS`,
-`BUILD-METADATA.txt`, `build.config` and `feeds-pinned.txt`. An earlier version
-wrote into the repo's `artifacts/`, which still holds a previously verified
-local image, and the first successful run therefore shipped a stale sysupgrade
-image alongside the new one — a real hazard for anyone picking a file to flash.
-`artifacts/` is now left untouched by the build.
+`BUILD-METADATA.txt`, `build.config` and `feeds-pinned.txt`.
 
 The workflow verifies the build rather than trusting it: every requested
-`CONFIG_PACKAGE_*` symbol is checked individually with `grep -qx`; the overlay,
+`CONFIG_PACKAGE_*` symbol is checked individually, and the check names the
+symbol it failed on rather than just exiting 1; the overlay,
 the prebuilt Ruby (including its symlinks), the OpenClash payload and
 `nft_compat.ko` are all asserted to have reached the rootfs staging tree the
 images are packed from; and `Build firmware` prints a timestamped heartbeat
@@ -91,21 +88,18 @@ It cannot be installed after the fact. This image has its own kernel ABI hash
 built for a different config panics the kernel even when the vermagic string
 looks identical. It has to be built by this workflow, from this tree.
 
-## Legacy UU package workflow
+## Build outputs
 
-`Build UU Game Booster packages for AX3000T` (`build-uu.yml`) builds the
-*generic* UU IPKs, which are console-only. It predates the vendor port above
-and is kept only for reference; the firmware workflow no longer uses it.
+Every run publishes into a fresh `dist/` directory, so the uploaded artifact
+contains only that run's images plus `SHA256SUMS`, `BUILD-METADATA.txt`,
+`build.config` and `feeds-pinned.txt`.
 
-## Verified local build
-
-The verified local image in `artifacts/` is iStoreOS 24.10.8 with OpenClash
-0.47.156, `dnsmasq-full`, and adblock-fast/HaGeZi support. It uses kernel ABI
-6.6.144 and the stock-layout `xiaomi_mi-router-ax3000t` profile. That image
-predates the UU vendor port, so it does not contain it.
-
-The sysupgrade image SHA-256 is recorded in `artifacts/SHA256SUMS` and its
-manifest.
+An earlier version wrote into a committed `artifacts/` directory instead. That
+directory held a previously verified local image, so the first successful run
+uploaded a stale sysupgrade image alongside the new one - a real hazard for
+anyone picking a file to flash. Both the directory and its 33 MB of binaries
+have since been removed, and nothing writes there now. The build's own size
+assertion is what guards the image, not a checked-in copy.
 
 The recovery helpers are for temporary recovery only. Never commit router
 backups, serial logs, credentials, private keys, or factory partition dumps.
@@ -154,8 +148,11 @@ connection and a serial console to be useful):
 | U-Boot menu | `4. Upgrade firmware` |
 | ⛔ | **Never pick menu 5 (ATF BL2) or 6 (ATF FIP)** — those touch the boot chain |
 
-> The bundled `scripts/tftp_recovery_server.ps1` is a reference implementation
-> only. It hit two compatibility problems against this device's U-Boot (OACK
-> `timeout` negotiation, and a duplicate ACK around block 256). The recovery
-> that actually succeeded used **Tftpd64 4.70**. Prefer it.
+> Use **Tftpd64 4.70** as the TFTP server. An earlier in-repo PowerShell
+> implementation was removed: it hit two compatibility problems against this
+> device's U-Boot (OACK `timeout` negotiation, and a duplicate ACK around block
+> 256) and never completed a transfer. Tftpd64 is what actually performed the
+> successful recovery, and the firmware now also carries an HTTP auto-flasher
+> (`files/usr/sbin/ax3000t-autoflash` and `build-recovery.yml`) which removes
+> the need for TFTP altogether.
 
