@@ -58,7 +58,14 @@ jobs:
           test "$(git -C openclash-source rev-parse HEAD)" = "$OPENCLASH_COMMIT"
           cp -a openclash-source/luci-app-openclash istoreos/package/
           test -f istoreos/package/luci-app-openclash/Makefile
-          test -x istoreos/package/luci-app-openclash/root/etc/init.d/openclash
+          # The init script is mode 100644 in the OpenClash tree on purpose: its
+          # Build/Prepare does `chmod 0755` on the copy inside PKG_BUILD_DIR. So
+          # assert its content, not its mode, and set the mode ourselves so the
+          # source tree is not the odd one out.
+          init=istoreos/package/luci-app-openclash/root/etc/init.d/openclash
+          test -f "$init"
+          grep -q 'openclash' "$init"
+          chmod 0755 "$init"
 
           # Its Build/Prepare calls po2lmo, which luci-base installs as a host
           # tool. Normal LuCI packages inherit `PKG_BUILD_DEPENDS += ... luci-base/host`
