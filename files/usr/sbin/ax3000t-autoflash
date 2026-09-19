@@ -1,0 +1,141 @@
+#!/bin/sh
+# AX3000T recovery auto-flasher.
+#
+# WHY THIS EXISTS
+# ---------------
+# This device boots a TFTP-delivered initramfs ("blue LED") but its Linux-side
+# LAN could never be reached over the wire, so there was no way to log in and
+# persist a firmware with sysupgrade. This script removes the need to log in at
+# all: on boot it finds whichever Ethernet port actually has carrier, talks to a
+# small HTTP server on the recovery PC, verifies the sysupgrade image against a
+# pinned SHA-256, and writes it to flash. On success it reboots into the new
+# firmware. On ANY failure it changes nothing and leaves the box running.
+#
+# CONFIGURE via /etc/config/ax3000t-recovery (see files/etc/config/).
+# Manual run: /usr/sbin/ax3000t-autoflash  (or `ax3000t-autoflash` in PATH terms)
+
+. /lib/functions.sh
+
+LOG="/tmp/ax3000t-autoflash.log"
+STAMP="/etc/ax3000t-autoflash.done"
+
+SERVER="192.168.10.100"
+IMAGE="known-good-sysupgrade.bin"
+SHA256="51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9"
+SELF_IP="192.168.10.2/24"
+IFACES="eth0 eth1 wan lan1 lan2 lan3"
+REBOOT_ON_SUCCESS="1"
+
+[ -f /etc/config/ax3000t-recovery ] && {
+    config_load ax3000t-recovery
+    config_get SERVER    global server    "$SERVER"
+    config_get IMAGE     global image     "$IMAGE"
+    config_get SHA256    global sha256    "$SHA256"
+    config_get SELF_IP   global self_ip   "$SELF_IP"
+    config_get IFACES    global ifaces    "$IFACES"
+    config_get REBOOT_ON_SUCCESS global reboot_on_success "$REBOOT_ON_SUCCESS"
+}
+
+log() {
+    echo "[$(date '+%H:%M:%S')] $*" >> "$LOG"
+    echo "AX3000T_AUTOFLASH: $*"
+}
+
+# --- one-shot guard: never flash twice on the same overlay -------------------
+if [ -f "$STAMP" ] && [ "$1" != "-f" ]; then
+    echo "AX3000T_AUTOFLASH: already done ($STAMP exists); use -f to override"
+    exit 0
+fi
+
+log "start: server=$SERVER image=$IMAGE self_ip=$SELF_IP"
+
+# --- 1. find a port with carrier and give it a usable address ----------------
+IP_BIN="ip"
+command -v ip >/dev/null 2>&1 || IP_BIN=""
+
+ready=""
+for i in $IFACES; do
+    [ -d "/sys/class/net/$i" ] || continue
+    carrier=$(cat "/sys/class/net/$i/carrier" 2>/dev/null)
+    log "iface $i carrier=${carrier:-?}"
+    [ "$carrier" = "1" ] || continue
+    if [ -n "$IP_BIN" ]; then
+        ip link set "$i" up 2>/dev/null
+        ip addr flush dev "$i" 2>/dev/null
+        ip addr add "$SELF_IP" dev "$i" 2>/dev/null
+    else
+        ifconfig "$i" up 2>/dev/null
+        ifconfig "$i" "${SELF_IP%%/*}" netmask 255.255.255.0 2>/dev/null
+    fi
+    # Does the recovery PC answer on this port?
+    if ping -c 2 -W 2 "$SERVER" >/dev/null 2>&1; then
+        log "iface $i has carrier AND can reach $SERVER"
+        ready="$i"
+        break
+    fi
+    log "iface $i has carrier but cannot reach $SERVER"
+done
+
+if [ -z "$ready" ]; then
+    log "FAIL: no interface could reach $SERVER - nothing written"
+    exit 1
+fi
+
+# --- 2. download the image --------------------------------------------------
+URL="http://$SERVER/$IMAGE"
+DEST="/tmp/$(basename "$IMAGE")"
+log "downloading $URL"
+
+fetched=""
+for attempt in 1 2 3; do
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 10 --max-time 600 -o "$DEST" "$URL" && fetched=1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 10 -O "$DEST" "$URL" && fetched=1
+    fi
+    [ -n "$fetched" ] && break
+    log "download attempt $attempt failed; retrying"
+    sleep 3
+done
+
+[ -n "$fetched" ] || { log "FAIL: download failed - nothing written"; exit 1; }
+
+size=$(wc -c < "$DEST" 2>/dev/null)
+log "downloaded $size bytes"
+
+# --- 3. verify against the pinned hash --------------------------------------
+if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$DEST" | cut -d' ' -f1)
+elif command -v openssl >/dev/null 2>&1; then
+    got=$(openssl dgst -sha256 "$DEST" | awk '{print $NF}')
+else
+    log "FAIL: no sha256 tool - refusing to flash unverified"
+    exit 1
+fi
+
+log "sha256 got=$got"
+log "sha256 want=$SHA256"
+
+if [ "$got" != "$SHA256" ]; then
+    log "FAIL: sha256 mismatch - NOT flashing"
+    exit 1
+fi
+log "sha256 verified OK"
+
+# --- 4. flash ---------------------------------------------------------------
+log "running: sysupgrade -n $DEST"
+touch "$STAMP"
+
+if sysupgrade -n "$DEST"; then
+    log "sysupgrade returned success"
+    if [ "$REBOOT_ON_SUCCESS" = "1" ]; then
+        log "rebooting into the new firmware"
+        sync
+        sleep 2
+        reboot
+    fi
+else
+    log "FAIL: sysupgrade returned an error"
+    rm -f "$STAMP"
+    exit 1
+fi
