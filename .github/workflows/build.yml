@@ -298,10 +298,10 @@ jobs:
           test -f "$rootfs/lib/modules/6.6.144/nft_compat.ko"
           test -f "$rootfs/lib/modules/6.6.144/x_tables.ko"
 
-          # Collect into a *fresh* directory. The repo's artifacts/ holds an
-          # older verified local image plus its manifest; writing there made the
-          # first successful run ship a stale sysupgrade image next to the new
-          # one, which is a genuine "flash the wrong file" hazard.
+          # Collect into a *fresh* directory every run. An earlier version wrote
+          # into a committed artifacts/ directory that held a previously verified
+          # image, so the upload shipped a stale sysupgrade image next to the new
+          # one - a genuine "flash the wrong file" hazard. That directory is gone.
           out=../dist
           rm -rf "$out"
           mkdir -p "$out"
