@@ -105,9 +105,41 @@ The verified local image in `artifacts/` is iStoreOS 24.10.8 with OpenClash
 predates the UU vendor port, so it does not contain it.
 
 The sysupgrade image SHA-256 is recorded in `artifacts/SHA256SUMS` and its
-manifest. Do not flash the `-ubootmod` profile. For U-Boot TFTP recovery use
-router IP `192.168.10.1`, TFTP host `192.168.10.100`, and filename
-`firmware_ubi.bin`; the included PowerShell helper can serve that file.
+manifest.
 
 The recovery helpers are for temporary recovery only. Never commit router
 backups, serial logs, credentials, private keys, or factory partition dumps.
+
+## Recovery — read this before flashing
+
+**Flashing this firmware has already bricked the router once.** The build was
+fine; the `sysupgrade` run left the `rootfs` volume outside the partition Linux
+looks in, and the device boot-looped. See [`docs/recovery/`](docs/recovery/).
+
+Two hard rules that came out of it:
+
+- **Always `sysupgrade -n`** (do not preserve `/etc`) when moving to a new build
+  here. Preserved `rc.d` links and old plugin configs are a known source of
+  trouble, and there is nothing in the old `/etc` that cannot be re-applied.
+- **Never install a kernel module built elsewhere.** A mismatched `.ko` panics
+  the kernel on load and puts the device into a reboot loop. Module-
+  configuration mismatches are fixed by rebuilding, never with
+  `opkg --force-depends`.
+
+Recovery parameters (measured on this device — U-Boot only, needs a **wired**
+connection and a serial console to be useful):
+
+| | |
+|---|---|
+| Router U-Boot IP | `192.168.10.1` |
+| Computer TFTP IP | `192.168.10.100` (`/24`, no gateway) |
+| Requested filename | `firmware_ubi.bin` |
+| Serial | `115200 8N1`, GND/TX/RX only — **never connect the 3.3V/5V pin** |
+| U-Boot menu | `4. Upgrade firmware` |
+| ⛔ | **Never pick menu 5 (ATF BL2) or 6 (ATF FIP)** — those touch the boot chain |
+
+> The bundled `scripts/tftp_recovery_server.ps1` is a reference implementation
+> only. It hit two compatibility problems against this device's U-Boot (OACK
+> `timeout` negotiation, and a duplicate ACK around block 256). The recovery
+> that actually succeeded used **Tftpd64 4.70**. Prefer it.
+
