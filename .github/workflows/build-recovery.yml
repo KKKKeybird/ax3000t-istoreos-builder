@@ -1,0 +1,128 @@
+name: Build AX3000T recovery initramfs (fast)
+
+# Builds a MINIMAL bootable initramfs, not a full firmware.
+#
+# Rationale: the device boots a TFTP-delivered initramfs ("blue LED") but its
+# Linux-side LAN was never reachable, so there was no way to log in and persist a
+# firmware with sysupgrade. The image produced here carries
+# /usr/sbin/ax3000t-autoflash, which on boot finds whichever Ethernet port has
+# carrier, HTTP-fetches the sysupgrade image from the recovery PC, verifies a
+# pinned sha256 and flashes it. No login, no serial, no working LAN required.
+#
+# This uses OpenWrt's ImageBuilder, which only ASSEMBLES a prebuilt kernel and
+# prebuilt packages. That is why it takes minutes instead of the ~3 h a full
+# iStoreOS source build needs: there is no OpenClash, no Ruby, no toolchain.
+#
+# The flashable firmware itself is not built here; the recovery flow writes the
+# already-verified known-good sysupgrade image.
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: "OpenWrt release used for the ImageBuilder"
+        required: false
+        default: "24.10.0"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout builder configuration
+        uses: actions/checkout@v4
+
+      - name: Install ImageBuilder
+        run: |
+          set -eux
+          VER="${{ inputs.openwrt_version }}"
+          IB="openwrt-imagebuilder-${VER}-mediatek-filogic.Linux-x86_64"
+          URL="https://downloads.openwrt.org/releases/${VER}/targets/mediatek/filogic/${IB}.tar.zst"
+          echo "fetching $URL"
+          curl -fsSL -o ib.tar.zst "$URL"
+          ls -l ib.tar.zst
+          # zstd is not installed on the runner image by default
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zstd
+          tar --zstd -xf ib.tar.zst
+          ls -d "$IB"
+          echo "IB=$IB" >> "$GITHUB_ENV"
+
+      - name: Assemble rootfs overlay (auto-flasher)
+        run: |
+          set -eux
+          mkdir -p "$IB/files/etc/init.d" "$IB/files/etc/config" "$IB/files/usr/sbin" "$IB/files/etc/uci-defaults"
+
+          # The flashing logic. Shared by the manual entry point and the
+          # boot-time init script.
+          cp files/usr/sbin/ax3000t-autoflash "$IB/files/usr/sbin/ax3000t-autoflash"
+          chmod 0755 "$IB/files/usr/sbin/ax3000t-autoflash"
+
+          # Boot-time runner (procd). START=99 so it runs after networking.
+          cat > "$IB/files/etc/init.d/ax3000t-autoflash" <<'EOF'
+          #!/bin/sh /etc/rc.common
+          START=99
+          STOP=99
+          USE_PROCD=1
+
+          start_service() {
+              procd_open_instance
+              procd_set_param command /usr/sbin/ax3000t-autoflash
+              procd_set_param stdout 1
+              procd_set_param stderr 1
+              procd_set_param respawn 3600 5 0
+              procd_close_instance
+          }
+          EOF
+          chmod 0755 "$IB/files/etc/init.d/ax3000t-autoflash"
+
+          # Belt and braces: uci-defaults runs early even if procd services are
+          # not yet enabled, and kicks the flasher off in the background so boot
+          # is never blocked by a slow/hung network.
+          cat > "$IB/files/etc/uci-defaults/99-ax3000t-autoflash" <<'EOF'
+          #!/bin/sh
+          /etc/init.d/ax3000t-autoflash enable 2>/dev/null
+          ( sleep 5; /usr/sbin/ax3000t-autoflash ) >/dev/null 2>&1 &
+          exit 0
+          EOF
+          chmod 0755 "$IB/files/etc/uci-defaults/99-ax3000t-autoflash"
+
+          cp files/etc/config/ax3000t-recovery "$IB/files/etc/config/ax3000t-recovery"
+
+          # Assertions: a silent packaging failure must fail CI, not the router.
+          test -x "$IB/files/usr/sbin/ax3000t-autoflash"
+          test -x "$IB/files/etc/init.d/ax3000t-autoflash"
+          test -x "$IB/files/etc/uci-defaults/99-ax3000t-autoflash"
+          test -f "$IB/files/etc/config/ax3000t-recovery"
+          grep -q 'ax3000t-autoflash' "$IB/files/usr/sbin/ax3000t-autoflash"
+          grep -q '51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9' \
+               "$IB/files/etc/config/ax3000t-recovery"
+
+      - name: Build the image
+        run: |
+          set -eux
+          cd "$IB"
+          make image \
+            PROFILE=xiaomi_mi-router-ax3000t \
+            PACKAGES="curl ca-bundle"
+            ls -l bin/targets/mediatek/filogic/
+
+      - name: Collect artifacts
+        run: |
+          set -eux
+          mkdir -p dist
+          find "$IB/bin/targets/mediatek/filogic" -maxdepth 1 -type f \
+            \( -name '*initramfs-kernel.bin' -o -name '*initramfs-factory.ubi' \) \
+            -exec cp -v {} dist/ \;
+          ls -l dist/
+          ( cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS )
+
+      - name: Upload recovery image
+        uses: actions/upload-artifact@v4
+        with:
+          name: AX3000T-recovery-initramfs
+          path: dist/
