@@ -113,18 +113,34 @@ backups, serial logs, credentials, private keys, or factory partition dumps.
 ## Recovery — read this before flashing
 
 **Flashing this firmware has already bricked the router once.** The build was
-fine; the `sysupgrade` run left the `rootfs` volume outside the partition Linux
-looks in, and the device boot-looped. See [`docs/recovery/`](docs/recovery/).
+fine; the `sysupgrade` run left the device with no `rootfs` volume at all.
 
-Two hard rules that came out of it:
+Root cause, now established: `/lib/upgrade/stage2` only unmounts `/overlay` when
+no config backup was requested — i.e. when you pass **`-n`**. `rootfs_data`
+backs `/overlay`, and a mounted UBIFS volume cannot be removed (`EBUSY`), so
+without `-n` the upgrade can only reuse the space freed by deleting the old
+`rootfs`. The old rootfs was 139 LEB; the new one needs 153 LEB; `ubimkvol`
+failed *after* `rootfs` had already been deleted. Full analysis:
+[`docs/recovery/ROOT-CAUSE-sysupgrade-rootfs.md`](docs/recovery/ROOT-CAUSE-sysupgrade-rootfs.md).
 
-- **Always `sysupgrade -n`** (do not preserve `/etc`) when moving to a new build
-  here. Preserved `rc.d` links and old plugin configs are a known source of
-  trouble, and there is nothing in the old `/etc` that cannot be re-applied.
+Three hard rules that came out of it:
+
+- **Always `sysupgrade -n`.** Not for config hygiene — it changes what the
+  upgrade script is able to do. Without it `/overlay` is never unmounted, so
+  `rootfs_data` is immovable and any image whose rootfs grew past the previous
+  volume size will fail and leave the device unbootable. With `-n` roughly
+  605 LEB are reclaimed and it just works. Re-apply config selectively afterwards.
 - **Never install a kernel module built elsewhere.** A mismatched `.ko` panics
   the kernel on load and puts the device into a reboot loop. Module-
   configuration mismatches are fixed by rebuilding, never with
   `opkg --force-depends`.
+- **Watch the rootfs volume size.** If the new rootfs is larger than the
+  installed `rootfs` volume, prefer flashing from the initramfs recovery system
+  (`/overlay` is not mounted there, so the full volume rebuild always works).
+  `files/lib/upgrade/nand.sh` adds a guard that refuses such an upgrade *before*
+  erasing anything, so a wrong attempt is recoverable instead of fatal —
+  but it only takes effect from the build that installs it onward.
+
 
 Recovery parameters (measured on this device — U-Boot only, needs a **wired**
 connection and a serial console to be useful):

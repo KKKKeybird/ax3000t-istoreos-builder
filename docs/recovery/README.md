@@ -9,6 +9,7 @@
 |---|---|
 | [`AX3000T-救机操作文档.md`](AX3000T-救机操作文档.md) | 本次（9/19）完整操作记录：串口、U-Boot 菜单、TFTP、卷修复、验收清单 |
 | [`AX3000T-恢复记录与关键点.md`](AX3000T-恢复记录与关键点.md) | 两种故障的对比、判别规则、TTL/TFTP 参数与操作细节 |
+| [`ROOT-CAUSE-sysupgrade-rootfs.md`](ROOT-CAUSE-sysupgrade-rootfs.md) | **根因定因报告**：为什么 sysupgrade 会留下没有 rootfs 的状态，以及修复 |
 
 > 两份文档中的 Windows 用户名已泛化为 `<user>`，其余内容保持原文。
 
@@ -35,7 +36,10 @@
 
 > ⚠️ 这一条与事前的猜测**不一致**，是本轮最重要的更正。
 
-事前怀疑是"`sysupgrade` 保留了旧 `/etc` 导致配置冲突"。**实际不是。**
+事前怀疑是"`sysupgrade` 保留了旧 `/etc` 导致配置冲突"。**实际不是**，真正的原因是
+**没有加 `-n` 导致 `/overlay` 未被卸载、`rootfs_data` 无法释放**，导致新 rootfs 放不下——
+完整定因见 [`ROOT-CAUSE-sysupgrade-rootfs.md`](ROOT-CAUSE-sysupgrade-rootfs.md)。
+（配置冲突只是次要风险，不是本次故障原因。）
 串口 + 内存恢复系统调查出的现场状态是：
 
 ```text
