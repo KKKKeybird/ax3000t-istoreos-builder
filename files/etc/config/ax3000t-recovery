@@ -1,11 +1,20 @@
-config global 'global'
-	# Where the recovery PC serves the sysupgrade image over plain HTTP.
-	option server '192.168.10.100'
-	option image  'known-good-sysupgrade.bin'
-	# Pinned sha256 of that image. A mismatch aborts the flash.
-	option sha256 '51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9'
-	# Address this box gives itself on whichever port has carrier.
-	option self_ip '192.168.10.2/24'
-	# Ports probed in order; the first with carrier AND a reachable server wins.
-	option ifaces 'eth0 eth1 wan lan1 lan2 lan3'
-	option reboot_on_success '1'
+#!/bin/sh
+# Defaults for the AX3000T recovery auto-flasher.
+# PLAIN SHELL, sourced by /usr/sbin/ax3000t-autoflash -- not UCI.
+# An initramfs has no overlay, so UCI may be unreadable in the recovery image.
+
+# Where the recovery PC serves the sysupgrade image over plain HTTP.
+SERVER="192.168.10.100"
+IMAGE="known-good-sysupgrade.bin"
+
+# Pinned sha256 of that image. A mismatch aborts the flash.
+SHA256="51ac8c2ecbc14b563aec938cc2d7ed408a8a40d2f153da6863124dad08def4a9"
+
+# Address this box gives itself on whichever port has carrier.
+SELF_IP="192.168.10.2/24"
+
+# Ports probed in order; first with carrier AND a reachable server wins.
+# eth0/eth1 cover the SoC MACs (WAN side), the rest are the switch ports.
+IFACES="eth0 eth1 wan lan1 lan2 lan3"
+
+REBOOT_ON_SUCCESS="1"
