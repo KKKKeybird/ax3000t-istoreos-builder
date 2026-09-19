@@ -10,6 +10,19 @@ env:
   ISTOREOS_COMMIT: fb971407ffd9a094e6f16d9c029f1f580ed5c2ad
   # vernesong/OpenClash tag v0.47.156
   OPENCLASH_COMMIT: c3a33c1d3407956fdf8f0e0b7c1a4c52e6ad9593
+  # Largest rootfs, in 126976-byte UBI LEBs, that this image may have.
+  #
+  # An upgrade deletes the running rootfs and then recreates the new one, and it
+  # can only reuse the space the old rootfs freed unless /overlay was unmounted
+  # (which only happens with `sysupgrade -n`). 139 LEB is the size of the rootfs
+  # volume currently installed on the target device, so staying under it means
+  # the upgrade succeeds whether or not -n is passed. Going over is what bricked
+  # the device: see docs/recovery/ROOT-CAUSE-sysupgrade-rootfs.md.
+  #
+  # After a successful flash the installed volume grows to the new image's size,
+  # so this can be raised to match - but only after that image is actually on the
+  # device, never before.
+  MAX_ROOTFS_LEB: 139
 
 jobs:
   build:
@@ -66,6 +79,28 @@ jobs:
           test -f "$init"
           grep -q 'openclash' "$init"
           chmod 0755 "$init"
+
+          # Drop the two bundled web dashboards (zashboard 4.34 MB + metacubexd
+          # 3.22 MB uncompressed, 2.77 MB compressed). They are pure static web
+          # apps, and OpenClash can fetch any of its four dashboards on demand
+          # from the LuCI page via openclash_download_dashboard.sh, so nothing is
+          # lost that cannot be reinstalled in one click - zashboard is even
+          # fetched as the gh-pages-cdn-fonts variant, which ships no bundled
+          # font. The LuCI controller only tests `fs.isdirectory` on each
+          # dashboard path, so their absence degrades cleanly.
+          #
+          # Why this matters: see docs/recovery/ROOT-CAUSE-sysupgrade-rootfs.md.
+          # A rootfs larger than the installed rootfs volume makes `sysupgrade`
+          # delete rootfs and then fail to recreate it. Trimming the dashboards
+          # takes the rootfs from 153 LEB to roughly 131 LEB, under the 139 LEB
+          # of the currently installed volume, so the upgrade succeeds with or
+          # without -n. The size assertion at the end of the build enforces this.
+          ocroot=istoreos/package/luci-app-openclash/root/usr/share/openclash
+          rm -rf "$ocroot/ui/zashboard" "$ocroot/ui/metacubexd"
+          test -f "$ocroot/openclash_download_dashboard.sh"
+          test -f "$ocroot/openclash.sh"
+          test ! -e "$ocroot/ui/zashboard"
+          test ! -e "$ocroot/ui/metacubexd"
 
           # Its Build/Prepare calls po2lmo, which luci-base installs as a host
           # tool. Normal LuCI packages inherit `PKG_BUILD_DEPENDS += ... luci-base/host`
@@ -260,6 +295,27 @@ jobs:
           test -n "$sysupgrade" && test -f "$sysupgrade"
           test "$(stat -c%s "$factory")" -lt 33554432
           test "$(stat -c%s "$sysupgrade")" -lt 33554432
+
+          # Guard against the failure mode that bricked the device: a rootfs too
+          # big to be recreated in the space deleting the old rootfs frees. Fail
+          # the build here rather than let it be discovered by flashing.
+          #
+          # Size is measured by extracting the member, not by parsing `tar tvf`:
+          # GNU tar and BSD tar place the size in different columns, so a column
+          # index silently yields 0 on the other flavour.
+          root_member="$(tar tf "$sysupgrade" | grep '/root$' | head -n1)"
+          test -n "$root_member"
+          root_size="$(tar xOf "$sysupgrade" "$root_member" | wc -c)"
+          test "$root_size" -gt 0
+          root_leb=$(( (root_size + 126976 - 1) / 126976 ))
+          echo "rootfs component: ${root_size} bytes = ${root_leb} LEB (limit ${MAX_ROOTFS_LEB})"
+          if [ "$root_leb" -gt "$MAX_ROOTFS_LEB" ]; then
+            echo "::error::rootfs is ${root_leb} LEB but the limit is ${MAX_ROOTFS_LEB} LEB." \
+                 "An in-place sysupgrade would delete rootfs and then fail to recreate it." \
+                 "Trim the image, or raise MAX_ROOTFS_LEB only once a smaller image is already installed." >&2
+            exit 1
+          fi
+
           cp "$factory" "$sysupgrade" "$out/"
           cp .config "$out/build.config"
           cp feeds-pinned.txt "$out/"
