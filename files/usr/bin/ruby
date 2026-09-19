@@ -1,0 +1,5 @@
+#!/bin/sh
+if ! [ -r "/usr/lib/ruby/3.3/rubygems.rb" ]; then
+	exec /usr/lib/ruby/ruby3.3-bin --disable-gems "$@"
+fi
+exec /usr/lib/ruby/ruby3.3-bin "$@"

@@ -77,18 +77,40 @@ jobs:
             sed -i 's#^PKG_BUILD_DIR:=#PKG_BUILD_DEPENDS:=luci-base/host\nPKG_BUILD_DIR:=#' "$m"
           grep -qx 'PKG_BUILD_DEPENDS:=luci-base/host' "$m"
 
-      - name: Install UU Game Booster rootfs overlay
+          # Drop `+ruby +ruby-yaml` from OpenClash's DEPENDS. Compiling Ruby from
+          # source is by far the most expensive thing this build does - the
+          # interpreter plus ten extension packages, each re-entering Ruby's own
+          # build system - and it accounted for about two hours of the last run.
+          # The identical prebuilt aarch64_cortex-a53 packages are shipped in
+          # files/ instead, so nothing needs to compile it.
+          #
+          # This is safe because the image rootfs is assembled with
+          # `opkg install <ipk list>` and package dependencies are resolved from
+          # the generated control files: with ruby gone from DEPENDS, nothing
+          # asks opkg for it. The files/ overlay is then applied on top of that
+          # rootfs by prepare_rootfs, which is where our copy lands.
+          # Plain substring substitution: no capture groups and no anchors, so
+          # it behaves identically under GNU sed (the runner) and BSD sed, which
+          # is what a local dry run of this file uses.
+          sed -i 's/+ruby +ruby-yaml //' "$m"
+          grep -q '+kmod-tun +unzip' "$m"
+          ! grep -qE '\+ruby' "$m"
+
+      - name: Install rootfs overlay (UU vendor plugin + prebuilt Ruby)
         run: |
           # files/ is OpenWrt's rootfs overlay: everything under it lands at the
-          # same path in the image, before the image is packed.
+          # same path in the image, after the packages are installed.
           mkdir -p istoreos/files
           cp -a files/. istoreos/files/
-          # git preserves the exec bit, but make it explicit: these are init scripts.
+          # git preserves the exec bit, but make it explicit: these are scripts.
           chmod 0755 istoreos/files/etc/init.d/uu-identity \
                      istoreos/files/etc/init.d/uuplugin \
                      istoreos/files/etc/uci-defaults/99-uu-vendor \
-                     istoreos/files/usr/sbin/uu/uuplugin_monitor.sh
-          # Fail early rather than shipping an image with a broken overlay.
+                     istoreos/files/usr/sbin/uu/uuplugin_monitor.sh \
+                     istoreos/files/usr/bin/ruby \
+                     istoreos/files/usr/lib/ruby/ruby3.3-bin
+
+          # ---- UU Game Booster ----
           test -f istoreos/files/usr/sbin/uu/uu.tar.gz
           test -f istoreos/files/usr/sbin/uu/uu.tar.gz.md5
           test -x istoreos/files/etc/init.d/uu-identity
@@ -104,6 +126,25 @@ jobs:
           # And it must be the H3C vendor build, not UU's generic one.
           test "$(tar tzf istoreos/files/usr/sbin/uu/uu.tar.gz | wc -l)" -eq 3
           tar tzf istoreos/files/usr/sbin/uu/uu.tar.gz | grep -qx 'uuplugin'
+
+          # ---- prebuilt Ruby ----
+          # /usr/bin/ruby is a shim that execs /usr/lib/ruby/ruby3.3-bin.
+          test -x istoreos/files/usr/bin/ruby
+          grep -q 'ruby3.3-bin' istoreos/files/usr/bin/ruby
+          test -x istoreos/files/usr/lib/ruby/ruby3.3-bin
+          test -f istoreos/files/usr/lib/libruby.so.3.3.10
+          test -f istoreos/files/usr/lib/libyaml-0.so.2.0.9
+          # libruby and libyaml are reached through symlinks; a symlink cannot be
+          # created through every upload path, so assert them rather than
+          # shipping a ruby that cannot resolve libruby.so.3.3 at runtime.
+          test -L istoreos/files/usr/lib/libruby.so.3.3
+          test -L istoreos/files/usr/lib/libyaml-0.so.2
+          # OpenClash needs YAML at runtime.
+          test -f istoreos/files/usr/lib/ruby/3.3/yaml.rb
+          test -f istoreos/files/usr/lib/ruby/3.3/psych.rb
+          test -f istoreos/files/usr/lib/ruby/3.3/aarch64-linux-gnu/psych.so
+          test -f istoreos/files/usr/lib/ruby/3.3/aarch64-linux-gnu/date_core.so
+          test "$(find istoreos/files/usr/lib/ruby -type f | wc -l)" -ge 70
 
       - name: Configure AX3000T stock layout
         working-directory: istoreos
@@ -133,6 +174,12 @@ jobs:
           grep -qx 'CONFIG_PACKAGE_kmod-inet-diag=y' .config
           grep -qx 'CONFIG_PACKAGE_kmod-nft-tproxy=y' .config
           grep -qx 'CONFIG_PACKAGE_dnsmasq_full_nftset=y' .config
+          # Runtime libraries the prebuilt Ruby links against.
+          grep -qx 'CONFIG_PACKAGE_libgmp10=y' .config
+          grep -qx 'CONFIG_PACKAGE_zlib=y' .config
+          # Ruby must not be compiled: it is supplied prebuilt by files/.
+          ! grep -qx 'CONFIG_PACKAGE_ruby=y' .config
+          ! grep -qx 'CONFIG_PACKAGE_ruby-yaml=y' .config
 
       - name: Download sources
         working-directory: istoreos
@@ -143,7 +190,19 @@ jobs:
       - name: Build firmware
         working-directory: istoreos
         run: |
+          # OpenWrt's own output goes silent for many minutes inside a single
+          # package, which makes a healthy build look hung (and made a previous
+          # run impossible to judge without live logs). Emit a timestamped,
+          # monotonically increasing progress line so the log is never silent.
+          (
+            while true; do
+              sleep 120
+              echo "[heartbeat $(date -u +%H:%M:%S)] ipk built so far: $(find bin/packages -name '*.ipk' 2>/dev/null | wc -l)"
+            done
+          ) &
+          hb=$!
           make -j"$(nproc)" || make -j1 V=s
+          kill "$hb" 2>/dev/null || true
 
       - name: Validate and collect artifacts
         working-directory: istoreos
@@ -162,6 +221,11 @@ jobs:
           # The serial is derived at boot from br-lan's MAC, so only the script
           # that writes /var/tmp/uu/h3c_info has to be present.
           grep -q 'manucode=' "$rootfs/etc/init.d/uu-identity"
+          # prebuilt Ruby really made it into the image
+          test -x "$rootfs/usr/bin/ruby"
+          test -x "$rootfs/usr/lib/ruby/ruby3.3-bin"
+          test -L "$rootfs/usr/lib/libruby.so.3.3"
+          test -f "$rootfs/usr/lib/ruby/3.3/yaml.rb"
           # OpenClash app plus its nftables/geo payload.
           test -x "$rootfs/etc/init.d/openclash"
           test -d "$rootfs/usr/share/openclash"
@@ -170,25 +234,40 @@ jobs:
           test -f "$rootfs/lib/modules/6.6.144/nft_compat.ko"
           test -f "$rootfs/lib/modules/6.6.144/x_tables.ko"
 
-          mkdir -p ../artifacts
+          # Collect into a *fresh* directory. The repo's artifacts/ holds an
+          # older verified local image plus its manifest; writing there made the
+          # first successful run ship a stale sysupgrade image next to the new
+          # one, which is a genuine "flash the wrong file" hazard.
+          out=../dist
+          rm -rf "$out"
+          mkdir -p "$out"
           factory="$(find bin/targets/mediatek/filogic -maxdepth 1 -type f -name '*xiaomi_mi-router-ax3000t-initramfs-factory.ubi' | head -n1)"
           sysupgrade="$(find bin/targets/mediatek/filogic -maxdepth 1 -type f -name '*xiaomi_mi-router-ax3000t-squashfs-sysupgrade.bin' | head -n1)"
           test -n "$factory" && test -f "$factory"
           test -n "$sysupgrade" && test -f "$sysupgrade"
           test "$(stat -c%s "$factory")" -lt 33554432
           test "$(stat -c%s "$sysupgrade")" -lt 33554432
-          cp "$factory" "$sysupgrade" .config feeds-pinned.txt ../artifacts/
+          cp "$factory" "$sysupgrade" "$out/"
+          cp .config "$out/build.config"
+          cp feeds-pinned.txt "$out/"
           {
-            echo "iStoreOS=$ISTOREOS_COMMIT"
-            echo "OpenClash=$OPENCLASH_COMMIT"
-          } >> ../artifacts/feeds-pinned.txt
-          sha256sum ../artifacts/* | tee ../artifacts/SHA256SUMS
-          ls -lh ../artifacts
+            echo "profile: xiaomi_mi-router-ax3000t (stock layout, not ubootmod)"
+            echo "firmware: iStoreOS 24.10.8"
+            echo "iStoreOS: $ISTOREOS_COMMIT"
+            echo "OpenClash: $OPENCLASH_COMMIT (v0.47.156)"
+            echo "UU: H3C NX30 PRO vendor build v14.9.4, uu.tar.gz md5 2afd39af94e5dda55dcfcb4bc220c5ce"
+            echo "ruby: 3.3.10-r1 prebuilt, from OpenWrt 24.10.8 aarch64_cortex-a53"
+            echo "kernel_abi: 6.6.144"
+          } > "$out/BUILD-METADATA.txt"
+          ( cd "$out" && sha256sum "$(basename "$factory")" "$(basename "$sysupgrade")" \
+              build.config feeds-pinned.txt BUILD-METADATA.txt > SHA256SUMS )
+          cat "$out/SHA256SUMS"
+          ls -lh "$out"
 
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
           name: AX3000T-RD03-iStoreOS-stock-layout
-          path: artifacts/
+          path: dist/
           if-no-files-found: error
           retention-days: 7

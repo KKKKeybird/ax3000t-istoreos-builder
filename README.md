@@ -20,8 +20,15 @@ either required image is absent or is 32 MiB or larger.
 |---|---|
 | OpenClash 0.47.156 | built from source (`luci-app-openclash` copied in by the workflow) |
 | UU Game Booster, H3C NX30 PRO vendor build | rootfs overlay `files/usr/sbin/uu/` |
+| Ruby 3.3.10 for OpenClash | rootfs overlay `files/` — **prebuilt**, see [`PREBUILT-RUBY.md`](PREBUILT-RUBY.md) |
 | `kmod-nft-compat`, `kmod-nf-ipt` | built from this tree's own kernel sources |
+| `libgmp10`, `zlib` | `ax3000t.config` (runtime libraries for the prebuilt Ruby) |
 | `dnsmasq-full`, adblock-fast, luci-app-store, argon theme | `ax3000t.config` |
+
+OpenClash declares `+ruby +ruby-yaml` in its `DEPENDS`, but the workflow strips
+that and ships the prebuilt packages instead: compiling Ruby from source was
+almost the whole cost of the first run that included OpenClash (2h56m for
+`Build firmware`, against 43m without it).
 
 ## Run
 
@@ -38,10 +45,21 @@ either required image is absent or is 32 MiB or larger.
 The first-stage image must end in `initramfs-factory.ubi`. The second-stage
 image must end in `squashfs-sysupgrade.bin`.
 
+Build outputs are collected into a **fresh `dist/` directory** on every run, so
+the uploaded artifact contains only that run's images plus `SHA256SUMS`,
+`BUILD-METADATA.txt`, `build.config` and `feeds-pinned.txt`. An earlier version
+wrote into the repo's `artifacts/`, which still holds a previously verified
+local image, and the first successful run therefore shipped a stale sysupgrade
+image alongside the new one — a real hazard for anyone picking a file to flash.
+`artifacts/` is now left untouched by the build.
+
 The workflow verifies the build rather than trusting it: every requested
-`CONFIG_PACKAGE_*` symbol is checked individually with `grep -qx`, and after
-the build it asserts that the overlay, the OpenClash payload and `nft_compat.ko`
-really landed in the rootfs staging tree the images are packed from.
+`CONFIG_PACKAGE_*` symbol is checked individually with `grep -qx`; the overlay,
+the prebuilt Ruby (including its symlinks), the OpenClash payload and
+`nft_compat.ko` are all asserted to have reached the rootfs staging tree the
+images are packed from; and `Build firmware` prints a timestamped heartbeat
+every two minutes, because OpenWrt's own output goes silent for many minutes
+inside a single package and a healthy build otherwise looks hung.
 
 ## UU Game Booster
 
