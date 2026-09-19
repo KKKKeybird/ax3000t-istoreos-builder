@@ -90,8 +90,21 @@ jobs:
           cp include/rootfs.mk include/rootfs.mk.orig
           sed -i 's/then \\$/then :; \\/' include/rootfs.mk
           sed -i 's/then \\\r$/then :; \\/' include/rootfs.mk
+
+          # Second, separate empty then-branch in the same macro:
+          #   if [ -z "$(CONFIG_USE_APK)" ]; then
+          #       $(if $(IB),,awk -i inplace ...)        <- IB unset  -> empty
+          #       $(if $(SOURCE_DATE_EPOCH),sed -i ... ;) <- SET by OpenWrt -> this
+          #   fi                                           line collapses to " ;"
+          # The generated text observed in CI was literally
+          #   if [ -z "" ]; then :;  ; sed -i "s/Installed-Time: ...
+          # so collapse any "then <whitespace> ;" back into a valid empty command.
+          perl -0pi -e 's/\bthen\s+;/then :;/g' include/rootfs.mk
+
           diff -u include/rootfs.mk.orig include/rootfs.mk || true
-          grep -c 'then :;' include/rootfs.mk
+          echo "then-guards: $(grep -c 'then :;' include/rootfs.mk)"
+          echo "empty-then remaining: $(grep -c 'then  *;' include/rootfs.mk || true)"
+          grep -n 'then :;' include/rootfs.mk
 
       - name: Assemble rootfs overlay (auto-flasher)
         run: |
